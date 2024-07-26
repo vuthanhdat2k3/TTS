@@ -37,6 +37,7 @@ def load_model(xtts_checkpoint, xtts_config, xtts_vocab):
     if torch.cuda.is_available():
         XTTS_MODEL.cuda()
 
+    print('Load model = vocab:', xtts_vocab)
     print("Model Loaded!")
     return "Model Loaded!"
 
@@ -173,8 +174,9 @@ if __name__ == "__main__":
             )
             lang = gr.Dropdown(
                 label="Dataset Language",
-                value="en",
+                value="vi",
                 choices=[
+                    "vi",
                     "en",
                     "es",
                     "fr",
@@ -282,6 +284,7 @@ if __name__ == "__main__":
                     # convert seconds to waveform frames
                     max_audio_length = int(max_audio_length * 22050)
                     config_path, original_xtts_checkpoint, vocab_file, exp_path, speaker_wav = train_gpt(language, num_epochs, batch_size, grad_acumm, train_csv, eval_csv, output_path=output_path, max_audio_length=max_audio_length)
+                    print('Train- Vocab:', vocab_file)
                 except:
                     traceback.print_exc()
                     error = traceback.format_exc()
@@ -324,8 +327,9 @@ if __name__ == "__main__":
                     )
                     tts_language = gr.Dropdown(
                         label="Language",
-                        value="en",
+                        value="vi",
                         choices=[
+                            "vi",
                             "en",
                             "es",
                             "fr",

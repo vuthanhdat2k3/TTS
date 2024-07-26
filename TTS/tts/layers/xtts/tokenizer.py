@@ -72,6 +72,29 @@ _whitespace_re = re.compile(r"\s+")
 
 # List of (regular expression, replacement) pairs for abbreviations:
 _abbreviations = {
+      "vi": [
+        (re.compile(r"\b%s\." % x[0], re.IGNORECASE), x[1])
+        for x in [
+            ("bs", "bác sĩ"),          # Doctor
+            ("th.s", "thạc sĩ"),       # Master (degree)
+            ("ts", "tiến sĩ"),         # Doctorate (PhD)
+            ("gđ", "giám đốc"),        # Director
+            ("pgđ", "phó giám đốc"),   # Deputy Director
+            ("kts", "kiến trúc sư"),   # Architect
+            ("cđ", "cao đẳng"),        # College
+            ("tnhh", "trách nhiệm hữu hạn"), # Limited Liability
+            ("nxb", "nhà xuất bản"),   # Publisher
+            ("ch", "cử nhân"),         # Bachelor
+            ("gs", "giáo sư"),         # Professor
+            ("cn", "công nhân"),       # Worker
+            ("ks", "kỹ sư"),           # Engineer
+            ("uv", "ủy viên"),         # Member
+            ("tp", "thành phố"),       # City
+            ("pgs", "phó giáo sư"),    # Associate Professor
+            ("tskh", "tiến sĩ khoa học"), # Doctor of Science
+        ]
+    ],
+
     "en": [
         (re.compile("\\b%s\\." % x[0], re.IGNORECASE), x[1])
         for x in [
@@ -239,6 +262,18 @@ def expand_abbreviations_multilingual(text, lang="en"):
 
 
 _symbols_multilingual = {
+    "vi": [
+          (re.compile(r"%s" % re.escape(x[0]), re.IGNORECASE), x[1])
+          for x in [
+              ("&", " và "),
+              ("@", " a còng "),
+              ("%", " phần trăm "),
+              ("#", " thăng "),
+              ("$", " đô la "),
+              ("£", " ơ rô "),
+              ("°", " độ "),
+          ]
+      ],
     "en": [
         (re.compile(r"%s" % re.escape(x[0]), re.IGNORECASE), x[1])
         for x in [
@@ -436,6 +471,7 @@ def expand_symbols_multilingual(text, lang="en"):
 
 
 _ordinal_re = {
+    "vi": re.compile(r"([0-9]+)(thứ)"),
     "en": re.compile(r"([0-9]+)(st|nd|rd|th)"),
     "es": re.compile(r"([0-9]+)(º|ª|er|o|a|os|as)"),
     "fr": re.compile(r"([0-9]+)(º|ª|er|re|e|ème)"),
@@ -501,6 +537,7 @@ def _expand_currency(m, lang="en", currency="USD"):
         "tr": ", ",
         "hu": ", ",
         "ko": ", ",
+        "vi": ", ",
     }
 
     if amount.is_integer():
@@ -512,6 +549,7 @@ def _expand_currency(m, lang="en", currency="USD"):
 
 
 def _expand_ordinal(m, lang="en"):
+    print(m)
     return num2words(int(m.group(1)), ordinal=True, lang=lang if lang != "cs" else "cz")
 
 
@@ -594,6 +632,7 @@ class VoiceBpeTokenizer:
         self.tokenizer = None
         if vocab_file is not None:
             self.tokenizer = Tokenizer.from_file(vocab_file)
+            print('VoiceBpeTokenizer-token:', self.tokenizer, '/' , vocab_file)
         self.char_limits = {
             "en": 250,
             "de": 253,
@@ -611,6 +650,7 @@ class VoiceBpeTokenizer:
             "ja": 71,
             "hu": 224,
             "ko": 95,
+            "vi": 500
         }
 
     @cached_property
@@ -628,7 +668,7 @@ class VoiceBpeTokenizer:
             )
 
     def preprocess_text(self, txt, lang):
-        if lang in {"ar", "cs", "de", "en", "es", "fr", "hu", "it", "nl", "pl", "pt", "ru", "tr", "zh", "ko"}:
+        if lang in {"ar", "cs", "de", "en", "es", "fr", "hu", "it", "nl", "pl", "pt", "ru", "tr", "zh", "ko", "vi"}:
             txt = multilingual_cleaners(txt, lang)
             if lang == "zh":
                 txt = chinese_transliterate(txt)
@@ -636,8 +676,7 @@ class VoiceBpeTokenizer:
                 txt = korean_transliterate(txt)
         elif lang == "ja":
             txt = japanese_cleaners(txt, self.katsu)
-        elif lang == "hi":
-            # @manmay will implement this
+        elif lang == "vi":
             txt = basic_cleaners(txt)
         else:
             raise NotImplementedError(f"Language '{lang}' is not supported.")
@@ -670,6 +709,14 @@ class VoiceBpeTokenizer:
 
 def test_expand_numbers_multilingual():
     test_cases = [
+        # Vietnamese
+        ("In 12.5 seconds.", "Trong mười hai phẩy năm giây.", "vi"),
+        ("There were 50 soldiers.", "Có năm mươi người lính.", "vi"),
+        ("This is a 1st test", "Đây là bài kiểm tra thứ nhất", "vi"),
+        ("That will be $20 sir.", "Của ngài hết hai mươi đô la.", "vi"),
+        ("That will be 20€ sir.", "Của ngài hết hai mươi euro.", "vi"),
+        ("That will be 20.15€ sir.", "Của ngài hết hai mươi euro, mười lăm xu.", "vi"),
+        ("That's 100,000.5.", "Đó là một trăm nghìn phẩy năm.", "vi"),
         # English
         ("In 12.5 seconds.", "In twelve point five seconds.", "en"),
         ("There were 50 soldiers.", "There were fifty soldiers.", "en"),
@@ -769,6 +816,9 @@ def test_expand_numbers_multilingual():
 
 def test_abbreviations_multilingual():
     test_cases = [
+        #Vietnamese
+        ("Hello Mr. Smith.", "Xin chào ông Smith.", "vi"),
+        ("Dr. Jones is here.", "Bác sĩ Jones đang ở đây.", "vi"),
         # English
         ("Hello Mr. Smith.", "Hello mister Smith.", "en"),
         ("Dr. Jones is here.", "doctor Jones is here.", "en"),
@@ -812,6 +862,7 @@ def test_abbreviations_multilingual():
 
 def test_symbols_multilingual():
     test_cases = [
+        ("I have 14% battery", "Tôi còn mười bốn phần trăm pin", "vi"),
         ("I have 14% battery", "I have 14 percent battery", "en"),
         ("Te veo @ la fiesta", "Te veo arroba la fiesta", "es"),
         ("J'ai 14° de fièvre", "J'ai 14 degrés de fièvre", "fr"),
