@@ -11,7 +11,6 @@ from TTS.tts.layers.xtts.gpt import GPT
 from TTS.tts.layers.xtts.hifigan_decoder import HifiDecoder
 from TTS.tts.layers.xtts.stream_generator import init_stream_support
 from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer, split_sentence
-from TTS.tts.layers.xtts.xtts_manager import SpeakerManager, LanguageManager
 from TTS.tts.models.base_tts import BaseTTS
 from TTS.utils.io import load_fsspec
 
@@ -274,7 +273,7 @@ class Xtts(BaseTTS):
             for i in range(0, audio.shape[1], 22050 * chunk_length):
                 audio_chunk = audio[:, i : i + 22050 * chunk_length]
 
-                # if the chunk is too short ignore it 
+                # if the chunk is too short ignore it
                 if audio_chunk.size(-1) < 22050 * 0.33:
                     continue
 
@@ -379,7 +378,7 @@ class Xtts(BaseTTS):
 
         return gpt_cond_latents, speaker_embedding
 
-    def synthesize(self, text, config, speaker_wav, language, speaker_id=None, **kwargs):
+    def synthesize(self, text, config, speaker_wav, language, **kwargs):
         """Synthesize speech with the given input text.
 
         Args:
@@ -395,6 +394,12 @@ class Xtts(BaseTTS):
             as latents used at inference.
 
         """
+        return self.inference_with_config(text, config, ref_audio_path=speaker_wav, language=language, **kwargs)
+
+    def inference_with_config(self, text, config, ref_audio_path, language, **kwargs):
+        """
+        inference with config
+        """
         assert (
             "zh-cn" if language == "zh" else language in self.config.languages
         ), f" ❗ Language {language} is not supported. Supported languages are {self.config.languages}"
@@ -405,18 +410,13 @@ class Xtts(BaseTTS):
             "repetition_penalty": config.repetition_penalty,
             "top_k": config.top_k,
             "top_p": config.top_p,
-        }
-        settings.update(kwargs)  # allow overriding of preset settings with kwargs
-        if speaker_id is not None:
-            gpt_cond_latent, speaker_embedding = self.speaker_manager.speakers[speaker_id].values()
-            return self.inference(text, language, gpt_cond_latent, speaker_embedding, **settings)
-        settings.update({
             "gpt_cond_len": config.gpt_cond_len,
             "gpt_cond_chunk_len": config.gpt_cond_chunk_len,
             "max_ref_len": config.max_ref_len,
             "sound_norm_refs": config.sound_norm_refs,
-        })
-        return self.full_inference(text, speaker_wav, language, **settings)
+        }
+        settings.update(kwargs)  # allow overriding of preset settings with kwargs
+        return self.full_inference(text, ref_audio_path, language, **settings)
 
     @torch.inference_mode()
     def full_inference(
@@ -520,8 +520,6 @@ class Xtts(BaseTTS):
     ):
         language = language.split("-")[0]  # remove the country code
         length_scale = 1.0 / max(speed, 0.05)
-        gpt_cond_latent = gpt_cond_latent.to(self.device)
-        speaker_embedding = speaker_embedding.to(self.device)
         if enable_text_splitting:
             text = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
@@ -630,8 +628,6 @@ class Xtts(BaseTTS):
     ):
         language = language.split("-")[0]  # remove the country code
         length_scale = 1.0 / max(speed, 0.05)
-        gpt_cond_latent = gpt_cond_latent.to(self.device)
-        speaker_embedding = speaker_embedding.to(self.device)
         if enable_text_splitting:
             text = split_sentence(text, language, self.tokenizer.char_limits[language])
         else:
@@ -710,22 +706,55 @@ class Xtts(BaseTTS):
         self.gpt.init_gpt_for_inference()
         super().eval()
 
+    def resize_weights(self, checkpoint, old_size, new_size, param_name):
+        """Resize weights for a specific parameter."""
+        old_weights = checkpoint[param_name]
+
+        # Create a new weight tensor with the new size
+        new_weights = torch.zeros(new_size, old_weights.size(1), device=old_weights.device)
+
+        # Copy the old weights to the new tensor
+        new_weights[:old_size, :] = old_weights
+
+        # Replace the old weights with the new weights in the checkpoint
+        checkpoint[param_name] = new_weights
+
+    def resize_bias(self, checkpoint, old_size, new_size, param_name):
+        """Resize bias for a specific parameter."""
+        old_bias = checkpoint[param_name]
+
+        # Create a new bias tensor with the new size
+        new_bias = torch.zeros(new_size, device=old_bias.device)
+
+        # Copy the old bias to the new tensor
+        new_bias[:old_size] = old_bias
+
+        # Replace the old bias with the new bias in the checkpoint
+        checkpoint[param_name] = new_bias
+
     def get_compatible_checkpoint_state_dict(self, model_path):
         checkpoint = load_fsspec(model_path, map_location=torch.device("cpu"))["model"]
-        # remove xtts gpt trainer extra keys
+
+        # Remove xtts gpt trainer extra keys
         ignore_keys = ["torch_mel_spectrogram_style_encoder", "torch_mel_spectrogram_dvae", "dvae"]
         for key in list(checkpoint.keys()):
-            # check if it is from the coqui Trainer if so convert it
+            # Check if it is from the coqui Trainer, if so convert it
             if key.startswith("xtts."):
                 new_key = key.replace("xtts.", "")
                 checkpoint[new_key] = checkpoint[key]
                 del checkpoint[key]
                 key = new_key
 
-            # remove unused keys
+            # Remove unused keys
             if key.split(".")[0] in ignore_keys:
                 del checkpoint[key]
 
+        # Resize the weights and biases to match the current model
+        old_vocab_size = 6681
+        new_vocab_size = 7544
+        self.resize_weights(checkpoint, old_vocab_size, new_vocab_size, "gpt.text_embedding.weight")
+        self.resize_weights(checkpoint, old_vocab_size, new_vocab_size, "gpt.text_head.weight")
+        self.resize_bias(checkpoint, old_vocab_size, new_vocab_size, "gpt.text_head.bias")
         return checkpoint
 
     def load_checkpoint(
@@ -737,7 +766,6 @@ class Xtts(BaseTTS):
         eval=True,
         strict=True,
         use_deepspeed=False,
-        speaker_file_path=None,
     ):
         """
         Loads a checkpoint from disk and initializes the model's state and tokenizer.
@@ -756,14 +784,6 @@ class Xtts(BaseTTS):
 
         model_path = checkpoint_path or os.path.join(checkpoint_dir, "model.pth")
         vocab_path = vocab_path or os.path.join(checkpoint_dir, "vocab.json")
-
-        if speaker_file_path is None and checkpoint_dir is not None:
-            speaker_file_path = os.path.join(checkpoint_dir, "speakers_xtts.pth")
-
-        self.language_manager = LanguageManager(config)
-        self.speaker_manager = None
-        if speaker_file_path is not None and os.path.exists(speaker_file_path):
-            self.speaker_manager = SpeakerManager(speaker_file_path)
 
         if os.path.exists(vocab_path):
             self.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_path)
